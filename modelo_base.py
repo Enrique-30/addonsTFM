@@ -9,8 +9,15 @@ from pyomo.util.infeasible import log_infeasible_constraints
 import gurobipy as gp
 
 NO_POSITIONS = 5
-POSITIONS = ['position{}'.format(i) for i in range(1, NO_POSITIONS + 1)]
-POSITIONS_INTERFERE = [("position3", "position5"), ("position4", "position5")]
+OUTSIDE = "outside"
+POSITIONS = [f"position{i}" for i in range(1, NO_POSITIONS + 1)] + [OUTSIDE]
+POSITIONS_INTERFERE = [
+    ("position3", "position5"),
+    ("position4", "position5"),
+    (OUTSIDE, "position3"), ("position3", OUTSIDE),
+    (OUTSIDE, "position4"), ("position4", OUTSIDE),
+    (OUTSIDE, "position5"), ("position5", OUTSIDE)
+]
 START_DATE = datetime.date.today()
 
 def ap_pyomo_model():
@@ -42,7 +49,7 @@ def ap_pyomo_model():
     model.pAirplaneOfClient = Param(model.sClients, model.sPlanes)
     model.pLastJobOfPlane = Param(model.sJobs, model.sPlanes, mutable=True)
     model.pPredictedFinishOfPlane = Param(model.sPlanes, mutable=True)
-    model.pTaskOfJob = Param(model.sJobs, within=PositiveIntegers)
+    model.pTaskOfJob = Param(model.sJobs, within=NonNegativeIntegers)
     model.pNumJobsPerPlane = Param(model.sPlanes, within=NonNegativeIntegers)
     model.prev_slot = Param( model.sSlots,default=None,within=model.sSlots | {None})
     model.pEarlyStartOfPlane = Param(model.sPlanes, within=NonNegativeReals)
@@ -366,6 +373,13 @@ def ap_pyomo_model():
         return 1 + model.v01BetaS[s, s2, p, p2] + model.v01BetaF[s, s2, p, p2] >= \
                model.v01JobInSlot[s, p, j] + model.v01JobInSlot[s2, p2, j]
 
+    # Entry/exit jobs must take place in the outside position
+    def fc26b_EntryExitOutside(model, j):
+        j_str = str(j)
+        if j_str.endswith('entry') or j_str.endswith('exit'):
+            return sum(model.v01JobInSlot[s, OUTSIDE, j] for s in model.sSlots) == 1
+        return Constraint.Skip
+
     # Rule: función objetivo
     # def fc27_NoMovements(model):
     #     return sum(model.v01JobInSlot[s, p, j] for s in model.sSlots for p in model.sPositions for j in model.sJobs) \
@@ -507,6 +521,9 @@ def ap_pyomo_model():
     print("Generating c26_NoOverlapSlots constraint")
     model.c26_NoOverlapSlots = Constraint(model.sSlots, model.sSlots, model.sPositions, model.sPositions, model.sJobs, rule=fc26_NoOverlapSlots)
 
+    print("Generating c26b_EntryExitOutside constraint")
+    model.c26b_EntryExitOutside = Constraint(model.sJobs, rule=fc26b_EntryExitOutside)
+
     print("Generating c27_EarlyStart constraint")
     model.c28_EarlyStart = Constraint(model.sJobs, rule=fc27_EarlyStart)
 
@@ -523,14 +540,45 @@ def ap_pyomo_model():
 def read_excel(file_name, sheet_name):
     df = pd.read_excel(file_name, sheet_name=sheet_name)
 
+    # Preserve predicted finish of real jobs before adding dummies
+    df['predicted_finish'] = df['date'] + df['duration']
+    sPlanes = df['plane'].unique().tolist()
+
+    # ------------------------------------------------------------------
+    # Dummy entry/exit jobs per plane located in the outside position
+    # ------------------------------------------------------------------
+    dummy_rows = []
+    for r in sPlanes:
+        df_r = df[df['plane'] == r]
+        max_task = int(df_r['task'].max()) if not df_r.empty else 0
+        dummy_rows.append({
+            'plane': r,
+            'task': 0,
+            'job': f'{r}-entry',
+            'date': 0,
+            'duration': 0.01,
+            'movable': 1,
+            'flexible': 1
+        })
+        dummy_rows.append({
+            'plane': r,
+            'task': max_task + 1,
+            'job': f'{r}-exit',
+            'date': 0,
+            'duration': 0.01,
+            'movable': 1,
+            'flexible': 1
+        })
+    if dummy_rows:
+        df = pd.concat([df, pd.DataFrame(dummy_rows)], ignore_index=True)
+
+    df['predicted_finish'] = df['date'] + df['duration']
 
     sJobs         = df['job'].to_list()
-    sPlanes       = df['plane'].unique().tolist()
     pJobDuration  = df.set_index('job')['duration'].to_dict()
     pDate         = df.set_index('job')['date'].to_dict()
     pPlaneOfJob   = df.set_index('job')['plane'].to_dict()
     pTaskOfJob    = df.set_index('job')['task'].to_dict()
-    df['predicted_finish'] = df['date'] + df['duration']
     # 2) Clientes: si existe la columna "client", la uso; si no existe, considero que cada avión es cliente propio.
     if 'client' in df.columns:
         sClients = df['client'].unique().tolist()
@@ -1888,8 +1936,7 @@ if __name__ == "__main__":
         print("="*80)
 
         print("\nGenerando gráfico de la solución...")
-        print_chart(solution)
-        df=print_chart(solution, html_path="gantt_basico.html")
+        df = print_chart(solution, html_path="gantt_basico.html")
 
         print("Generando diagrama mejorado de Gantt y resumen de movimientos…")
         df_full, movimientos = plot_enhanced_solution(df, instance, html_path="gantt_idles_movs.html")
