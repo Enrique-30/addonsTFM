@@ -8,13 +8,13 @@ from datetime import date, timedelta
 from pyomo.util.infeasible import log_infeasible_constraints
 import gurobipy as gp
 
+
 NO_POSITIONS = 5
 OUTSIDE = "outside"
 POSITIONS = [f"position{i}" for i in range(1, NO_POSITIONS + 1)] + [OUTSIDE]
 POSITIONS_INTERFERE = [
     ("position3", "position5"),
     ("position4", "position5"),
-    (OUTSIDE, "position3"), ("position3", OUTSIDE),
     (OUTSIDE, "position4"), ("position4", OUTSIDE),
     (OUTSIDE, "position5"), ("position5", OUTSIDE)
 ]
@@ -540,6 +540,13 @@ def ap_pyomo_model():
 def read_excel(file_name, sheet_name):
     df = pd.read_excel(file_name, sheet_name=sheet_name)
 
+
+    sJobs         = df['job'].to_list()
+    pJobDuration  = df.set_index('job')['duration'].to_dict()
+    pDate         = df.set_index('job')['date'].to_dict()
+    pPlaneOfJob   = df.set_index('job')['plane'].to_dict()
+    pTaskOfJob    = df.set_index('job')['task'].to_dict()
+
     # Preserve predicted finish of real jobs before adding dummies
     df['predicted_finish'] = df['date'] + df['duration']
     sPlanes = df['plane'].unique().tolist()
@@ -574,11 +581,6 @@ def read_excel(file_name, sheet_name):
 
     df['predicted_finish'] = df['date'] + df['duration']
 
-    sJobs         = df['job'].to_list()
-    pJobDuration  = df.set_index('job')['duration'].to_dict()
-    pDate         = df.set_index('job')['date'].to_dict()
-    pPlaneOfJob   = df.set_index('job')['plane'].to_dict()
-    pTaskOfJob    = df.set_index('job')['task'].to_dict()
     # 2) Clientes: si existe la columna "client", la uso; si no existe, considero que cada avión es cliente propio.
     if 'client' in df.columns:
         sClients = df['client'].unique().tolist()
@@ -1822,7 +1824,7 @@ if __name__ == "__main__":
 
     # Configuración de límites para la resolución
     opt.options['TimeLimit'] = 1000       # Límite de tiempo en segundos (8 minutos)
-    opt.options['MIPGap'] = 0.05         # Gap relativo (5%)
+    opt.options['MIPGap'] = 0.10         # Gap relativo (5%)
 
     # Configuración para priorizar heurísticas sobre Branch and Bound
     opt.options['Heuristics'] = 1.0      # Máximo esfuerzo en heurísticas (valor entre 0 y 1)
@@ -1936,7 +1938,7 @@ if __name__ == "__main__":
         print("="*80)
 
         print("\nGenerando gráfico de la solución...")
-        df = print_chart(solution, html_path="gantt_basico.html")
+        df=print_chart(solution, html_path="gantt_basico.html")
 
         print("Generando diagrama mejorado de Gantt y resumen de movimientos…")
         df_full, movimientos = plot_enhanced_solution(df, instance, html_path="gantt_idles_movs.html")
